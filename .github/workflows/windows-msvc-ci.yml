@@ -1,0 +1,81 @@
+# SPDX-FileCopyrightText: (C) 2026 Deskflow Developers
+# SPDX-License-Identifier: MIT
+
+name: Windows MSVC CI
+
+on:
+  push:
+    branches: [ci/windows-msvc-pha-103]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-msvc-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: windows-2022-x64
+    runs-on: windows-2022
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        target:
+          - name: windows-2022-x64
+            arch: amd64
+            qt-version: 6.11.3
+            vcpkg-triplet: x64-windows-release
+    steps:
+      - name: Checkout tested revision
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Keep upstream version tags available without triggering tag releases in this CI copy.
+      - name: Fetch source version tags and record revision
+        shell: bash
+        run: |
+          git fetch https://github.com/Arashi0987/deskflow.git 'refs/tags/*:refs/tags/*'
+          git rev-parse HEAD
+          git log -1 --format='%H %s'
+          git describe --long
+
+      - name: Setup VC++ environment
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: ${{ matrix.target.arch }}
+          spectre: true
+
+      - name: Install dependencies
+        id: get-deps
+        uses: ./.github/actions/install-dependencies
+        with:
+          qt-version: ${{ matrix.target.qt-version }}
+          vcpkg-triplet: ${{ matrix.target.vcpkg-triplet }}
+
+      - name: Get version
+        uses: ./.github/actions/get-version
+
+      - name: Configure
+        run: cmake -Bbuild -DCMAKE_BUILD_TYPE=Release -DSKIP_BUILD_TESTS=ON -DCMAKE_COMPILE_WARNING_AS_ERROR=ON -G Ninja ${{ steps.get-deps.outputs.vcpkg-cmake-config }} -DPACKAGE_VERSION_LABEL="${{ env.DESKFLOW_PACKAGE_VERSION }}"
+
+      - name: Build Windows packages
+        run: cmake --build build --config Release -j8 --target package
+
+      - name: Unit tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build/src/unittests --output-on-failure --no-tests=error
+
+      - name: Test portable package
+        uses: ./.github/actions/test-package
+
+      - name: Upload Windows packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: package-deskflow-windows-2022-x64
+          path: build/deskflow[-_]*.*
+          if-no-files-found: error
